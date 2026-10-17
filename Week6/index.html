@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Finland Population Growth</title>
+  <script src="https://unpkg.com/frappe-charts@latest/dist/frappe-charts.min.umd.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #f5f6f8;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 1.5rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 1.4rem; font-weight: 600; letter-spacing: 0.02em; }
+    header a#navigation {
+      color: #eb5146;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      border: 1px solid #eb5146;
+      padding: 0.4rem 1rem;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+    header a#navigation:hover { background: #eb5146; color: #fff; }
+    main { max-width: 900px; margin: 2rem auto; padding: 0 1.5rem; }
+    .controls {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+    #input-area {
+      flex: 1;
+      min-width: 200px;
+      padding: 0.6rem 1rem;
+      border: 1.5px solid #dde1e9;
+      border-radius: 6px;
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #input-area:focus { border-color: #eb5146; }
+    button {
+      padding: 0.6rem 1.2rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+    button:active { transform: scale(0.97); }
+    #submit-data { background: #eb5146; color: #fff; }
+    #submit-data:hover { background: #d43f34; }
+    #add-data { background: #1a1a2e; color: #fff; }
+    #add-data:hover { background: #2e2e4a; }
+    #chart { background: #fff; border-radius: 10px; padding: 1rem; box-shadow: 0 2px 12px rgba(0,0,0,0.07); }
+    #status { margin-top: 0.75rem; font-size: 0.85rem; color: #888; min-height: 1.2em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🇫🇮 Finland Population</h1>
+    <a id="navigation" href="/newchart.html">Births &amp; Deaths →</a>
+  </header>
+  <main>
+    <div class="controls">
+      <input id="input-area" type="text" placeholder="Enter municipality (e.g. Helsinki)" />
+      <button id="submit-data">Search</button>
+      <button id="add-data">+ Predict Next</button>
+    </div>
+    <div id="chart"></div>
+    <div id="status"></div>
+  </main>
+
+  <script>
+    const API_URL = 'https://statfin.stat.fi/PxWeb/api/v1/en/StatFin/synt/12dy.px';
+    const YEARS = ["2000","2001","2002","2003","2004","2005","2006","2007","2008","2009","2010","2011","2012","2013","2014","2015","2016","2017","2018","2019","2020","2021"];
+
+    let municipalityCodes = {};   // name (lowercase) -> code
+    let chart = null;
+    let currentValues = [];
+    let currentLabels = [...YEARS];
+    let currentArea = 'SSS';
+    let currentAreaName = 'Finland';
+
+    function buildQuery(areaCode, contentCode = 'synt-vaesto') {
+      return {
+        query: [
+          {
+            code: "timeperiod_y",
+            selection: { filter: "item", values: YEARS }
+          },
+          {
+            code: "alue_23_20260101",
+            selection: { filter: "item", values: [areaCode] }
+          },
+          {
+            code: "contentscode",
+            selection: { filter: "item", values: [contentCode] }
+          }
+        ],
+        response: { format: "json-stat2" }
+      };
+    }
+
+    async function fetchMunicipalityCodes() {
+      const res = await fetch(API_URL);
+      const data = await res.json();
+      // second variable contains codes and labels
+      const areaVar = data.variables[1];
+      const codes = areaVar.values;
+      const names = areaVar.valueTexts;
+      names.forEach((name, i) => {
+        municipalityCodes[name.toLowerCase()] = codes[i];
+      });
+    }
+
+    async function fetchPopulation(areaCode) {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildQuery(areaCode))
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return Object.values(data.value);
+    }
+
+    function renderChart(values, labels, title) {
+      currentValues = [...values];
+      currentLabels = [...labels];
+
+      const chartData = {
+        labels: labels,
+        datasets: [{ values: values, chartType: 'line' }]
+      };
+
+      if (chart) {
+        chart.update(chartData);
+        // update title manually via DOM if possible
+        const titleEl = document.querySelector('#chart .title');
+        if (titleEl) titleEl.textContent = title;
+      } else {
+        chart = new frappe.Chart('#chart', {
+          title: title,
+          data: chartData,
+          type: 'line',
+          height: 450,
+          colors: ['#eb5146'],
+          axisOptions: { xIsSeries: true }
+        });
+      }
+    }
+
+    function setStatus(msg) {
+      document.getElementById('status').textContent = msg;
+    }
+
+    async function loadArea(areaCode, areaName) {
+      setStatus(`Loading data for ${areaName}…`);
+      try {
+        const values = await fetchPopulation(areaCode);
+        currentArea = areaCode;
+        currentAreaName = areaName;
+        currentLabels = [...YEARS];
+        renderChart(values, currentLabels, `Population — ${areaName}`);
+        setStatus('');
+        // store current area for newchart.html
+        sessionStorage.setItem('currentArea', areaCode);
+        sessionStorage.setItem('currentAreaName', areaName);
+      } catch (e) {
+        setStatus(`Error fetching data: ${e.message}`);
+      }
+    }
+
+    document.getElementById('submit-data').addEventListener('click', async () => {
+      const input = document.getElementById('input-area').value.trim().toLowerCase();
+      if (!input) return;
+      if (municipalityCodes[input] !== undefined) {
+        await loadArea(municipalityCodes[input], input.charAt(0).toUpperCase() + input.slice(1));
+      } else {
+        setStatus(`Municipality "${input}" not found. Check spelling.`);
+      }
+    });
+
+    document.getElementById('input-area').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('submit-data').click();
+    });
+
+    document.getElementById('add-data').addEventListener('click', () => {
+      if (currentValues.length < 2) return;
+      const deltas = [];
+      for (let i = 1; i < currentValues.length; i++) {
+        deltas.push(currentValues[i] - currentValues[i - 1]);
+      }
+      const meanDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+      const nextValue = Math.round(currentValues[currentValues.length - 1] + meanDelta);
+      const lastYear = parseInt(currentLabels[currentLabels.length - 1]);
+      const nextLabel = String(lastYear + 1);
+
+      currentValues.push(nextValue);
+      currentLabels.push(nextLabel);
+
+      if (chart) {
+        chart.addDataPoint(nextLabel, [nextValue]);
+      }
+    });
+
+    // Init
+    (async () => {
+      await fetchMunicipalityCodes();
+      await loadArea('SSS', 'Finland');
+    })();
+  </script>
+</body>
+</html>
